@@ -69,3 +69,107 @@ def has_valid_header(jpeg_bytes: bytes) -> bool:
     JPEG has zero prepend tolerance — the magic bytes must be at offset 0.
     """
     return jpeg_bytes[:3] == JPEG_MAGIC
+
+
+# ── Job B helpers (Injection) ─────────────────────────────────────────────────
+
+COM_MARKER = b"\xff\xfe"        # JPEG Comment marker
+MAX_COM_PAYLOAD = 65533         # 65535 - 2 bytes length field
+
+
+def find_injection_offset(jpeg_bytes: bytes) -> int:
+    """
+    Find the optimal byte offset to insert metadata/comment markers.
+
+    Standard convention:
+      - Start immediately after SOI (offset 2).
+      - If APP0 (JFIF) or APP1 (Exif) marker exists at offset 2, place
+        the comment immediately after the initial APP segment(s).
+        This preserves JFIF/Exif identification in strict header parsers.
+      - If no APP markers exist, returns offset 2 (right after SOI).
+    """
+    if not has_valid_header(jpeg_bytes):
+        raise ValueError("Invalid JPEG header — cannot determine injection offset.")
+
+    pos = 2
+    # Check for consecutive APP markers (0xFFE0 .. 0xFFEF) starting at offset 2
+    while pos + 4 <= len(jpeg_bytes) and jpeg_bytes[pos] == 0xFF and 0xE0 <= jpeg_bytes[pos + 1] <= 0xEF:
+        marker_len = int.from_bytes(jpeg_bytes[pos + 2 : pos + 4], "big")
+        if marker_len < 2 or pos + 2 + marker_len > len(jpeg_bytes):
+            break
+        pos += 2 + marker_len
+
+    return pos
+
+
+def inject_payload(jpeg_bytes: bytes, payload: bytes) -> tuple[bytes, int]:
+    """
+    Inject arbitrary payload bytes into JPEG COM (Comment) segment(s).
+
+    Parameters
+    ----------
+    jpeg_bytes : Raw host JPEG bytes.
+    payload    : Foreign bytes to embed inside COM marker(s).
+
+    Returns
+    -------
+    (new_jpeg_bytes, payload_offset)
+      where payload_offset is the byte offset of the payload inside the
+      resulting JPEG file (useful for offset patching).
+    """
+    import struct
+
+    if not has_valid_header(jpeg_bytes):
+        raise ValueError("Cannot inject into invalid JPEG: missing SOI marker.")
+
+    insert_pos = find_injection_offset(jpeg_bytes)
+
+    if len(payload) <= MAX_COM_PAYLOAD:
+        # Single COM marker
+        com_data = COM_MARKER + struct.pack(">H", len(payload) + 2) + payload
+        polyglot = jpeg_bytes[:insert_pos] + com_data + jpeg_bytes[insert_pos:]
+        payload_offset = insert_pos + 4
+        return polyglot, payload_offset
+
+    # Multi-segment chaining for large payloads
+    segments = bytearray()
+    first_payload_offset = insert_pos + 4
+    for i in range(0, len(payload), MAX_COM_PAYLOAD):
+        chunk = payload[i : i + MAX_COM_PAYLOAD]
+        segments.extend(COM_MARKER + struct.pack(">H", len(chunk) + 2) + chunk)
+
+    polyglot = jpeg_bytes[:insert_pos] + bytes(segments) + jpeg_bytes[insert_pos:]
+    return polyglot, first_payload_offset
+
+
+def extract_comments(jpeg_bytes: bytes) -> list[bytes]:
+    """Extract all payloads stored inside COM (FF FE) segments."""
+    comments: list[bytes] = []
+    if not has_valid_header(jpeg_bytes):
+        return comments
+
+    pos = 2
+    while pos + 4 <= len(jpeg_bytes):
+        if jpeg_bytes[pos] != 0xFF:
+            pos += 1
+            continue
+
+        marker = jpeg_bytes[pos + 1]
+        if marker in (0xD8, 0xD9, 0x00):   # SOI, EOI, or escaped FF 00
+            pos += 2
+            continue
+        if marker == 0xDA:                 # SOS (Start of Scan) - scan data begins
+            break
+
+        marker_len = int.from_bytes(jpeg_bytes[pos + 2 : pos + 4], "big")
+        if marker_len < 2:
+            break
+
+        if marker == 0xFE:                 # COM segment
+            data_start = pos + 4
+            data_end = pos + 2 + marker_len
+            comments.append(jpeg_bytes[data_start:data_end])
+
+        pos += 2 + marker_len
+
+    return comments

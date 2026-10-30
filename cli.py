@@ -23,6 +23,16 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# Ensure UTF-8 output on Windows to prevent UnicodeEncodeError on box characters
+if sys.platform == "win32":
+    try:
+        if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import click
 from rich.console import Console
 from rich.panel import Panel
@@ -34,7 +44,7 @@ from .core.format_registry import FormatRegistry
 from .probe.probe_engine import ProbeEngine
 from .probe.probe_result import Confidence
 
-console = Console()
+console = Console(legacy_windows=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

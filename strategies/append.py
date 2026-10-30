@@ -21,6 +21,9 @@ Offset patchers registered for format B:
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
+
 from ..core.format_registry import FormatSpec
 from ..formats import pdf  as pdf_fmt
 from ..formats import jpeg as jpeg_fmt
@@ -36,7 +39,7 @@ class AppendStrategy(BaseStrategy):
 
     # Job A normalizers — one per append-tolerant host format.
     # Each callable: (bytes) -> bytes
-    _NORMALISE: dict[str, object] = {
+    _NORMALISE: dict[str, Callable[[bytes], bytes]] = {
         "pdf":  pdf_fmt.normalize,
         "jpeg": jpeg_fmt.normalize,
         "png":  png_fmt.normalize,
@@ -46,7 +49,7 @@ class AppendStrategy(BaseStrategy):
 
     # Offset patchers — for payload formats that store absolute offsets.
     # Each callable: (bytes, int) -> bytes
-    _PATCH_OFFSETS: dict[str, object] = {
+    _PATCH_OFFSETS: dict[str, Callable[[bytes, int], bytes]] = {
         "zip":  zip_fmt.patch_offsets,
         "docx": zip_fmt.patch_offsets,
         "jar":  zip_fmt.patch_offsets,

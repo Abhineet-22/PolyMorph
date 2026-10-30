@@ -15,6 +15,7 @@ from __future__ import annotations
 from ..core.format_registry import FormatRegistry, FormatSpec, PolyStrategy
 from ..strategies.base import BaseStrategy
 from ..strategies.append import AppendStrategy
+from ..strategies.inject import InjectStrategy
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,10 +23,11 @@ from ..strategies.append import AppendStrategy
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Maps PolyStrategy enum values to concrete strategy classes.
-# New strategies (INJECT, PREPEND, NEST) are registered here as they land.
+# New strategies (PREPEND, NEST) are registered here as they land.
 
 _STRATEGY_CLASSES: dict[PolyStrategy, type[BaseStrategy]] = {
     PolyStrategy.APPEND: AppendStrategy,
+    PolyStrategy.INJECT: InjectStrategy,
 }
 
 

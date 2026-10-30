@@ -147,6 +147,21 @@ def patch_offsets(zip_bytes: bytes, prepend_size: int) -> bytes:
     return bytes(data)
 
 
+def patch_offsets_and_tail(zip_bytes: bytes, prepend_size: int, tail_size: int = 0) -> bytes:
+    """
+    Patch central directory offsets by prepend_size, and optionally patch
+    the EOCD comment length to account for trailing bytes (e.g. when the ZIP
+    is embedded inside a host format before image scan data).
+    """
+    patched = patch_offsets(zip_bytes, prepend_size)
+    if 0 < tail_size <= EOCD_MAX_COMMENT:
+        data = bytearray(patched)
+        eocd_off = find_eocd_offset(data)
+        struct.pack_into("<H", data, eocd_off + 20, tail_size)
+        return bytes(data)
+    return patched
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Validation helper
 # ─────────────────────────────────────────────────────────────────────────────

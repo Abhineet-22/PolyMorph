@@ -100,3 +100,70 @@ def detect_version(html_bytes: bytes) -> str:
     if window.startswith(b"<html") or window.startswith(b"<!doctype"):
         return "unknown"
     return "unknown"
+
+
+# ── Job B helpers (Injection) ─────────────────────────────────────────────────
+
+def find_injection_offset(html_bytes: bytes) -> int:
+    """
+    Find safe offset to insert HTML comment payload.
+    Ideally right after <!DOCTYPE ...> tag or opening <html> tag.
+    """
+    lower = html_bytes.lower()
+    doctype_idx = lower.find(b"<!doctype")
+    if doctype_idx != -1:
+        end_doctype = lower.find(b">", doctype_idx)
+        if end_doctype != -1:
+            pos = end_doctype + 1
+            if pos < len(html_bytes) and html_bytes[pos:pos+1] in (b"\r", b"\n"):
+                pos += 1
+                if pos < len(html_bytes) and html_bytes[pos:pos+1] == b"\n":
+                    pos += 1
+            return pos
+
+    html_idx = lower.find(b"<html")
+    if html_idx != -1:
+        end_html = lower.find(b">", html_idx)
+        if end_html != -1:
+            return end_html + 1
+
+    return 0
+
+
+def inject_payload(html_bytes: bytes, payload: bytes) -> tuple[bytes, int]:
+    """
+    Inject foreign payload inside an HTML comment (<!-- payload -->).
+
+    Parameters
+    ----------
+    html_bytes : Raw host HTML bytes.
+    payload    : Foreign bytes to embed.
+
+    Returns
+    -------
+    (new_html_bytes, payload_offset)
+    """
+    insert_pos = find_injection_offset(html_bytes)
+    prefix = b"<!-- "
+    suffix = b" -->\n"
+    comment = prefix + payload + suffix
+
+    polyglot = html_bytes[:insert_pos] + comment + html_bytes[insert_pos:]
+    payload_offset = insert_pos + len(prefix)
+    return polyglot, payload_offset
+
+
+def extract_comments(html_bytes: bytes) -> list[bytes]:
+    """Extract contents of all HTML comments (<!-- ... -->)."""
+    comments: list[bytes] = []
+    start = 0
+    while True:
+        idx = html_bytes.find(b"<!--", start)
+        if idx == -1:
+            break
+        end = html_bytes.find(b"-->", idx + 4)
+        if end == -1:
+            break
+        comments.append(html_bytes[idx + 4 : end].strip())
+        start = end + 3
+    return comments

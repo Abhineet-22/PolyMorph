@@ -79,3 +79,35 @@ def has_valid_header(pdf_bytes: bytes) -> bool:
     Does NOT require the marker to be at offset 0.
     """
     return find_header_offset(pdf_bytes) != -1
+
+
+# ── Job B helpers (Injection) ─────────────────────────────────────────────────
+
+def inject_payload(pdf_bytes: bytes, payload: bytes) -> tuple[bytes, int]:
+    """
+    Inject payload into a PDF comment line prior to the startxref marker.
+
+    Parameters
+    ----------
+    pdf_bytes : Raw host PDF bytes.
+    payload   : Foreign payload bytes.
+
+    Returns
+    -------
+    (new_pdf_bytes, payload_offset)
+    """
+    if not has_valid_header(pdf_bytes):
+        raise ValueError("Cannot inject into invalid PDF: missing %PDF- header.")
+
+    # Locate startxref marker
+    sxref_pos = pdf_bytes.rfind(b"startxref")
+    if sxref_pos == -1:
+        # Fallback to %%EOF
+        sxref_pos = pdf_bytes.rfind(EOF_MARKER)
+        if sxref_pos == -1:
+            raise ValueError("Cannot locate startxref or %%EOF marker in PDF.")
+
+    comment_line = b"% " + payload.replace(b"\n", b"\n% ") + b"\n"
+    polyglot = pdf_bytes[:sxref_pos] + comment_line + pdf_bytes[sxref_pos:]
+    payload_offset = sxref_pos + 2
+    return polyglot, payload_offset

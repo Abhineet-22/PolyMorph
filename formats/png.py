@@ -88,3 +88,96 @@ def has_valid_header(png_bytes: bytes) -> bool:
     PNG has zero prepend tolerance — the signature must be at offset 0.
     """
     return png_bytes[:8] == PNG_SIGNATURE
+
+
+# ── Job B helpers (Injection) ─────────────────────────────────────────────────
+
+def build_chunk(chunk_type: bytes, chunk_data: bytes) -> bytes:
+    """
+    Construct a complete, CRC-validated PNG chunk.
+
+    Layout:
+      4 bytes — data length (big-endian uint32)
+      4 bytes — chunk type  (e.g. b"tEXt")
+      N bytes — chunk data
+      4 bytes — CRC32 calculated over (chunk type + chunk data)
+    """
+    import zlib
+    crc = zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
+    return struct.pack(">I", len(chunk_data)) + chunk_type + chunk_data + struct.pack(">I", crc)
+
+
+def find_injection_offset(png_bytes: bytes) -> int:
+    """
+    Return the byte offset immediately following the IHDR chunk.
+    In PNG, IHDR must be the first chunk. Ancillary chunks (like tEXt)
+    are placed immediately after IHDR and before IDAT.
+    """
+    if not has_valid_header(png_bytes):
+        raise ValueError("Invalid PNG signature — cannot determine injection offset.")
+
+    if len(png_bytes) < 33:
+        raise ValueError("PNG data truncated before IHDR chunk.")
+
+    ihdr_len = struct.unpack_from(">I", png_bytes, 8)[0]
+    # Signature (8) + length (4) + type (4) + data (ihdr_len) + CRC (4)
+    return 8 + 4 + 4 + ihdr_len + 4
+
+
+def inject_payload(
+    png_bytes: bytes,
+    payload: bytes,
+    chunk_type: bytes = b"tEXt",
+    keyword: bytes = b"Comment",
+) -> tuple[bytes, int]:
+    """
+    Inject arbitrary payload into an ancillary PNG chunk (default: tEXt).
+
+    Parameters
+    ----------
+    png_bytes  : Raw host PNG bytes.
+    payload     : Foreign payload bytes.
+    chunk_type : PNG chunk type (default b"tEXt").
+    keyword    : Metadata keyword for tEXt chunk (default b"Comment").
+
+    Returns
+    -------
+    (new_png_bytes, payload_offset)
+    """
+    if not has_valid_header(png_bytes):
+        raise ValueError("Cannot inject into invalid PNG: missing 8-byte signature.")
+
+    insert_pos = find_injection_offset(png_bytes)
+
+    # For tEXt chunk: keyword (1-79 bytes) + null separator + text data
+    chunk_data = keyword + b"\x00" + payload
+    chunk = build_chunk(chunk_type, chunk_data)
+
+    polyglot = png_bytes[:insert_pos] + chunk + png_bytes[insert_pos:]
+    # Offset of payload within polyglot:
+    # insert_pos + 4 (length) + 4 (type) + len(keyword) + 1 (null byte)
+    payload_offset = insert_pos + 4 + 4 + len(keyword) + 1
+    return polyglot, payload_offset
+
+
+def extract_chunks(png_bytes: bytes, target_type: bytes = b"tEXt") -> list[bytes]:
+    """Extract raw data from all chunks matching target_type."""
+    results: list[bytes] = []
+    if not has_valid_header(png_bytes):
+        return results
+
+    pos = 8
+    while pos + 12 <= len(png_bytes):
+        chunk_len = struct.unpack_from(">I", png_bytes, pos)[0]
+        ctype = png_bytes[pos + 4 : pos + 8]
+        cdata = png_bytes[pos + 8 : pos + 8 + chunk_len]
+
+        if ctype == target_type:
+            results.append(cdata)
+
+        if ctype == IEND_TYPE:
+            break
+
+        pos += 12 + chunk_len
+
+    return results
