@@ -43,6 +43,7 @@ from .core.constructor import Constructor
 from .core.format_registry import FormatRegistry
 from .probe.probe_engine import ProbeEngine
 from .probe.probe_result import Confidence
+from .probe.target_scanner import TargetScanner, ScanOptions
 
 console = Console(legacy_windows=False)
 
@@ -534,6 +535,183 @@ def probe(
             console.print(
                 "\n[dim]Run with --update to write these values to the registry.[/]"
             )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# scan command  — General-purpose web recon
+# ─────────────────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--url",   required=True, help="Target URL to scan (e.g. http://localhost:8081).")
+@click.option("--depth", default=2,     show_default=True, help="BFS crawl depth.")
+@click.option("--pages", default=50,    show_default=True, help="Max pages to crawl.")
+@click.option("--timeout", default=10,  show_default=True, help="Per-request timeout (seconds).")
+@click.option("--out",   default=None,  type=click.Path(path_type=Path),
+              help="Save full JSON report to this file.")
+@click.option("--no-probe", is_flag=True, default=False,
+              help="Skip probing well-known discovery paths.")
+@click.option("--no-verify", is_flag=True, default=False,
+              help="Disable TLS verification (defaults to certifi CA bundle).")
+def scan(
+    url: str,
+    depth: int,
+    pages: int,
+    timeout: int,
+    out: Path | None,
+    no_probe: bool,
+    no_verify: bool,
+) -> None:
+    """
+    Passive web reconnaissance: fingerprint, map, and recommend polyglot strategies.
+
+    Example:
+
+      python -m PolyMorph scan --url http://localhost:8081
+
+      python -m PolyMorph scan --url https://target.example.com --depth 3 --out recon.json
+    """
+    console.rule("[bold magenta]PolyMorph[/] — Recon Scan")
+
+    try:
+        from .probe.target_scanner import TargetScanner, ScanOptions
+    except ImportError as exc:
+        console.print(f"[red]Import error: {exc}[/]")
+        console.print("[dim]Install missing deps: pip install requests beautifulsoup4 certifi[/]")
+        sys.exit(1)
+
+    opts = ScanOptions(
+        max_depth=depth,
+        max_pages=pages,
+        timeout=timeout,
+        probe_common_paths=not no_probe,
+        verify_tls=not no_verify,
+    )
+    scanner = TargetScanner(opts)
+
+    with console.status(f"Scanning [bold cyan]{url}[/]…"):
+        report = scanner.scan(url)
+
+    # ── Summary header ────────────────────────────────────────────────────────
+    hdr = Table(show_header=False, border_style="bold magenta")
+    hdr.add_column("Field",  style="bold cyan")
+    hdr.add_column("Value")
+    hdr.add_row("Target",          report.target)
+    hdr.add_row("Scan time (UTC)", report.scan_time_utc)
+    hdr.add_row("Duration",        f"{report.duration_seconds}s")
+    hdr.add_row("Pages crawled",   str(report.pages_crawled))
+    console.print(hdr)
+
+    # ── Server info ───────────────────────────────────────────────────────────
+    if report.server_info:
+        t = Table(title="Server / Response Headers", border_style="cyan", show_header=True)
+        t.add_column("Header", style="bold cyan")
+        t.add_column("Value")
+        for k, v in report.server_info.items():
+            t.add_row(k, v[:100])
+        console.print(t)
+
+    # ── Technology summary ────────────────────────────────────────────────────
+    if report.tech_summary:
+        t = Table(title="Detected Technologies (by evidence weight)", border_style="bold magenta")
+        t.add_column("Technology",  style="bold")
+        t.add_column("Evidence Weight", justify="right")
+        t.add_column("Category")
+
+        # Build category lookup from first evidence per tech
+        cat_lookup: dict[str, str] = {}
+        for ev in report.tech_evidence:
+            if ev.tech not in cat_lookup:
+                cat_lookup[ev.tech] = ev.category
+
+        for tech, weight in report.tech_summary.items():
+            cat = cat_lookup.get(tech, "")
+            colour = {
+                "exposure": "red", "runtime": "yellow",
+                "framework": "cyan", "webserver": "green",
+                "cms": "magenta", "api": "blue",
+                "frontend": "white", "upload": "bright_yellow",
+                "security_header_present": "dim",
+            }.get(cat, "white")
+            t.add_row(f"[{colour}]{tech}[/]", str(weight), cat)
+        console.print(t)
+    else:
+        console.print("[dim]No technology signatures matched.[/]")
+
+    # ── Upload endpoints ──────────────────────────────────────────────────────
+    if report.upload_endpoints:
+        t = Table(title="Upload Endpoints Discovered", border_style="bright_yellow")
+        t.add_column("URL",          style="bold")
+        t.add_column("Method")
+        t.add_column("Enctype")
+        t.add_column("Accept")
+        t.add_column("Source page")
+        for ep in report.upload_endpoints:
+            t.add_row(
+                ep.url[:60], ep.method, ep.enctype[:30],
+                ", ".join(ep.accept)[:40] or "—",
+                ep.source_page[:50],
+            )
+        console.print(t)
+    else:
+        console.print("[dim]No upload endpoints found in crawled HTML.[/]")
+
+    # ── Security gaps ─────────────────────────────────────────────────────────
+    if report.security_gaps:
+        t = Table(title="Security Header Gaps", border_style="red")
+        t.add_column("Header",   style="bold cyan")
+        t.add_column("Severity", justify="center")
+        t.add_column("Impact")
+        sev_colours = {"high": "red", "medium": "yellow", "low": "dim"}
+        for g in report.security_gaps:
+            col = sev_colours.get(g.severity, "white")
+            t.add_row(g.header, f"[{col}]{g.severity.upper()}[/]", g.gap[:80])
+        console.print(t)
+    else:
+        console.print("[bold green]✓ All checked security headers are present.[/]")
+
+    # ── Exposed paths ─────────────────────────────────────────────────────────
+    if report.exposed_paths:
+        t = Table(title="High-Interest Exposed Paths", border_style="red")
+        t.add_column("Path + Status")
+        for ep in report.exposed_paths:
+            t.add_row(f"[red]{ep}[/]")
+        console.print(t)
+
+    # ── Polyglot recommendations ──────────────────────────────────────────────
+    if report.recommendations:
+        t = Table(title="Polyglot Attack Recommendations", border_style="bold magenta")
+        t.add_column("Trigger Evidence", style="bold cyan")
+        t.add_column("Strategy")
+        t.add_column("Host Formats")
+        t.add_column("Risk")
+        t.add_column("Note")
+        for rec in report.recommendations:
+            risk_colour = "red" if "RCE" in rec.risk else "yellow"
+            t.add_row(
+                rec.trigger[:45],
+                f"[bold]{rec.strategy.upper()}[/]",
+                ", ".join(rec.host_formats),
+                f"[{risk_colour}]{rec.risk}[/]",
+                rec.payload_note[:60],
+            )
+        console.print(t)
+
+        console.print(
+            "\n[bold yellow]⚡ To build a recommended polyglot:[/]\n"
+            "  [dim]python -m PolyMorph build <host_file> <payload_file> "
+            "-A <host_fmt> -B <payload_fmt> -s <strategy> -o output.ext[/]"
+        )
+    else:
+        console.print("[dim]No polyglot recommendations generated.[/]")
+
+    # ── Save JSON ─────────────────────────────────────────────────────────────
+    if out:
+        report.save(out)
+        console.print(f"\n[bold green]✓ Full JSON report saved to:[/] {out}")
+    else:
+        console.print(
+            "\n[dim]Tip: use --out report.json to save the full report.[/]"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

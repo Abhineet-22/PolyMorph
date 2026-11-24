@@ -64,15 +64,22 @@ class FormatValidator:
     @staticmethod
     def _validate_html(data):
         text = data[:4096].decode("utf-8", errors="ignore").lower()
-        if "<html" in text or "<!doctype" in text:
-            return True, "HTML: tag structure detected."
-        return False, "HTML: no <html> or <!DOCTYPE> in first 4 KB."
+        if any(tag in text for tag in ("<html", "<!doctype", "<script", "<svg", "<body", "<head")):
+            return True, "HTML: script or HTML tag structure detected."
+        return False, "HTML: no HTML or script tags found in first 4 KB."
+
+    @staticmethod
+    def _validate_php(data):
+        if b"<?php" in data or b"<?=" in data:
+            return True, "PHP: opening script tag (<?php or <?=) detected."
+        return False, "PHP: no opening <?php or <?= tag found."
 
 FormatValidator._VALIDATORS = {
     "pypdf":   FormatValidator._validate_pdf,
     "zipfile": FormatValidator._validate_zip,
     "pillow":  FormatValidator._validate_pillow,
     "html":    FormatValidator._validate_html,
+    "php":     FormatValidator._validate_php,
     "docx":    FormatValidator._validate_zip,
     "jar":     FormatValidator._validate_zip,
 }

@@ -841,6 +841,115 @@ def _register_builtins() -> None:
         ),
     ))
 
+    # ── SVG ───────────────────────────────────────────────────────────
+    FormatRegistry.register_builtin(FormatSpec(
+        name="svg",
+        extensions=(".svg",),
+        mime_types=("image/svg+xml",),
+        magic_bytes=(b"<svg", b"<?xml", b"<!DOCTYPE svg"),
+        magic_offset=0,
+        category="image",
+
+        append_tolerant=True,
+        prepend_tolerant=True,
+        max_prepend_bytes=-1,
+        eof_markers=(b"</svg>",),
+        scans_from_end=False,
+        requires_offset_patch=False,
+
+        has_internal_checksum=False,
+        checksum_covers_append=False,
+
+        has_comment_field=True,       # <!-- XML comments -->
+        comment_max_bytes=0,          # unlimited
+        has_metadata_block=True,      # <metadata>, <title>, <desc> elements
+        injection_offsets=(),
+        is_container=False,
+
+        viable_as_host=True,
+        viable_as_payload=True,
+
+        typical_entropy_range=(3.5, 5.5),
+
+        probe_verified=False,
+        parser_notes={
+            "chrome_blink":  "Full DOM execution in <object>/<embed>/<iframe>/direct navigation; scripts suppressed in <img> context",
+            "firefox_gecko": "Same as Chrome — full DOM in browsing contexts, suppressed in <img>",
+            "xml_parser":    "Strict XML — CDATA section required for '<', '>', '&' inside <script>",
+            "dompurify":     "Strips <script> and event-handler attributes by default — standard SVG sanitizer",
+            "svg_sanitize":  "Library-level sanitization required for user-uploaded SVGs serving in origin context",
+        },
+        known_polyglot_uses=(
+            "SVG avatar upload → Stored XSS (HackerOne high-bounty category)",
+            "SVG <script> in <object> tag without nosniff/CSP → DOM MIME origin execution",
+            "SVG + XML polyglot — valid SVG and valid XHTML simultaneously",
+            "SVG onload= event handler XSS in user-generated content platforms",
+            "SVG <foreignObject> XHTML embedding for CSP bypass",
+        ),
+
+        validator="html",
+        notes=(
+            "SVG is an XML-based vector image format. Unlike PNG/JPEG/GIF which are "
+            "binary raster formats decoded by image pixel pipelines, SVG is parsed as an "
+            "XML DOM and supports native <script> elements and event-handler attributes "
+            "(onload, onerror, onclick) per the W3C SVG specification. "
+            "Scripts execute in the full origin when SVG is loaded in any browsing context "
+            "(<object>, <embed>, <iframe>, or direct URL navigation). "
+            "Scripts are suppressed ONLY when loaded via <img src=...> (image loading context). "
+            "No binary magic bytes — SVG starts with XML text, bypassing binary magic-byte "
+            "upload filters trivially. CDATA wrapping required for JS inside XML-parsed <script>."
+        ),
+    ))
+
+    # ── PHP ───────────────────────────────────────────────────────────
+    FormatRegistry.register_builtin(FormatSpec(
+        name="php",
+        extensions=(".php", ".phtml", ".php5"),
+        mime_types=("application/x-httpd-php", "text/x-php", "application/x-php"),
+        magic_bytes=(b"<?php", b"<?="),
+        magic_offset=0,
+        category="script",
+
+        append_tolerant=True,
+        prepend_tolerant=True,
+        max_prepend_bytes=-1,
+        eof_markers=(),
+        scans_from_end=False,
+        requires_offset_patch=False,
+
+        has_internal_checksum=False,
+        checksum_covers_append=False,
+
+        has_comment_field=True,
+        comment_max_bytes=0,
+        has_metadata_block=False,
+        injection_offsets=(),
+        is_container=False,
+
+        viable_as_host=True,
+        viable_as_payload=True,
+
+        typical_entropy_range=(4.0, 6.0),
+
+        probe_verified=False,
+        parser_notes={
+            "php_zend": "executes only code inside <?php tags; treats all leading/trailing binary data as raw output",
+        },
+        known_polyglot_uses=(
+            "JPEG+PHP upload filter bypass (LFI to RCE)",
+            "GIF+PHP web shell injection",
+            "PNG+PHP avatar payload",
+        ),
+
+        validator="php",
+        notes=(
+            "PHP interpreters scan streams for opening script tags (<?php or <?=). "
+            "All bytes prior to the opening tag and after the closing tag (?>) are "
+            "treated as inert passthrough text, making PHP universally prepend- and "
+            "append-tolerant when paired with LFI or CGI sinks."
+        ),
+    ))
+
 
 _register_builtins()
 FormatRegistry._load_custom_formats()

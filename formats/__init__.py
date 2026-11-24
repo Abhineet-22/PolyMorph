@@ -1,1 +1,1 @@
-from . import pdf, zip_fmt, jpeg, png, gif, html
+from . import pdf, zip_fmt, jpeg, png, gif, html, svg

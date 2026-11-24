@@ -11,3 +11,7 @@ dpkt>=0.2.6
 rarfile>=3.2
 pefile>=0.2.5
 python-magic>=0.4.27
+# Recon module
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+certifi>=2024.0.0
